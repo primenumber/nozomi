@@ -70,9 +70,9 @@ fn optimize_basic(insts: &[Inst]) -> Vec<Inst> {
         match inst {
             Inst::Add(x) => {
                 if let Some(Inst::Add(y)) = result.last_mut() {
-                    *y += x;
+                    *y = y.wrapping_add(*x);
                 } else if let Some(Inst::Init(y)) = result.last_mut() {
-                    *y += x;
+                    *y = y.wrapping_add(*x);
                 } else {
                     result.push(Inst::Add(*x));
                 }
