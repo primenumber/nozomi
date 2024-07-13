@@ -2,7 +2,6 @@ use std::cmp::max;
 use std::io::Read;
 use std::ops::Index;
 use std::ops::IndexMut;
-use std::rc::Rc;
 
 enum RawInst {
     Add(u8),
