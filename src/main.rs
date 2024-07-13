@@ -4,7 +4,7 @@ use std::ops::Index;
 use std::ops::IndexMut;
 
 enum RawInst {
-    Add(u8),
+    AddI(u8),
     MovePtr(isize),
     GetChar,
     PutChar,
@@ -16,8 +16,8 @@ fn parse(code: &str) -> Vec<RawInst> {
     let mut insts = Vec::new();
     for ch in code.chars() {
         match ch {
-            '+' => insts.push(RawInst::Add(1)),
-            '-' => insts.push(RawInst::Add(255)),
+            '+' => insts.push(RawInst::AddI(1)),
+            '-' => insts.push(RawInst::AddI(255)),
             '>' => insts.push(RawInst::MovePtr(1)),
             '<' => insts.push(RawInst::MovePtr(-1)),
             '[' => insts.push(RawInst::StartLoop),
@@ -32,7 +32,7 @@ fn parse(code: &str) -> Vec<RawInst> {
 
 #[derive(Clone, Debug, PartialEq)]
 enum Inst {
-    Add(u8),
+    AddI(u8),
     MovePtr(isize),
     Init(u8),
     GetChar,
@@ -46,7 +46,7 @@ fn extract_loops(raw_insts: &[RawInst]) -> Option<Vec<Inst>> {
     for raw_inst in raw_insts {
         let last = loop_stack.last_mut()?;
         match raw_inst {
-            RawInst::Add(x) => last.push(Inst::Add(*x)),
+            RawInst::AddI(x) => last.push(Inst::AddI(*x)),
             RawInst::MovePtr(x) => last.push(Inst::MovePtr(*x)),
             RawInst::GetChar => last.push(Inst::GetChar),
             RawInst::PutChar => last.push(Inst::PutChar),
@@ -67,13 +67,13 @@ fn optimize_basic(insts: &[Inst]) -> Vec<Inst> {
     let mut result = Vec::new();
     for inst in insts {
         match inst {
-            Inst::Add(x) => {
-                if let Some(Inst::Add(y)) = result.last_mut() {
+            Inst::AddI(x) => {
+                if let Some(Inst::AddI(y)) = result.last_mut() {
                     *y += x;
                 } else if let Some(Inst::Init(y)) = result.last_mut() {
                     *y += x;
                 } else {
-                    result.push(Inst::Add(*x));
+                    result.push(Inst::AddI(*x));
                 }
             }
             Inst::MovePtr(x) => {
@@ -85,7 +85,7 @@ fn optimize_basic(insts: &[Inst]) -> Vec<Inst> {
             }
             Inst::Loop(l) => {
                 let optimized_body = optimize_basic(l);
-                if optimized_body == vec![Inst::Add(255)] {
+                if optimized_body == vec![Inst::AddI(255)] {
                     result.push(Inst::Init(0));
                 } else {
                     result.push(Inst::Loop(optimized_body));
@@ -101,7 +101,7 @@ fn optimize_basic(insts: &[Inst]) -> Vec<Inst> {
 
 #[derive(Clone, Debug, PartialEq)]
 enum InstWithOffset {
-    Add(isize, u8),
+    AddI(isize, u8),
     MovePtr(isize),
     Init(isize, u8),
     //Dup(isize, isize),
@@ -114,7 +114,7 @@ fn annotate_offset(insts: &[Inst]) -> Vec<InstWithOffset> {
     insts
         .iter()
         .map(|inst| match inst {
-            Inst::Add(x) => InstWithOffset::Add(0, *x),
+            Inst::AddI(x) => InstWithOffset::AddI(0, *x),
             Inst::MovePtr(x) => InstWithOffset::MovePtr(*x),
             Inst::Init(x) => InstWithOffset::Init(0, *x),
             Inst::GetChar => InstWithOffset::GetChar(0),
@@ -129,7 +129,7 @@ fn delay_move_ptr(insts: &[InstWithOffset]) -> Vec<InstWithOffset> {
     let mut result = Vec::new();
     for inst in insts {
         match inst {
-            InstWithOffset::Add(ofs, x) => result.push(InstWithOffset::Add(ofs + offset, *x)),
+            InstWithOffset::AddI(ofs, x) => result.push(InstWithOffset::AddI(ofs + offset, *x)),
             InstWithOffset::MovePtr(x) => offset += *x,
             InstWithOffset::Init(ofs, x) => result.push(InstWithOffset::Init(ofs + offset, *x)),
             //InstWithOffset::Dup(ofs1, ofs2) => {
@@ -210,7 +210,7 @@ fn exec_body(
     for inst in insts {
         *cycle_count += 1;
         match inst {
-            InstWithOffset::Add(ofs, x) => {
+            InstWithOffset::AddI(ofs, x) => {
                 let index = ptr.wrapping_add_signed(*ofs);
                 memory[index] = memory[index].wrapping_add(*x)
             }
