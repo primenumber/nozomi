@@ -69,9 +69,9 @@ fn optimize_basic(insts: &[Inst]) -> Vec<Inst> {
         match inst {
             Inst::AddI(x) => {
                 if let Some(Inst::AddI(y)) = result.last_mut() {
-                    *y += x;
+                    *y = y.wrapping_add(*x);
                 } else if let Some(Inst::Init(y)) = result.last_mut() {
-                    *y += x;
+                    *y = y.wrapping_add(*x);
                 } else {
                     result.push(Inst::AddI(*x));
                 }
@@ -104,10 +104,10 @@ enum InstWithOffset {
     AddI(isize, u8),
     MovePtr(isize),
     Init(isize, u8),
-    //Dup(isize, isize),
+    AddMul(isize, isize, u8),
     GetChar(isize),
     PutChar(isize),
-    Loop(isize, Vec<InstWithOffset>),
+    Loop(Vec<InstWithOffset>),
 }
 
 fn annotate_offset(insts: &[Inst]) -> Vec<InstWithOffset> {
@@ -119,7 +119,7 @@ fn annotate_offset(insts: &[Inst]) -> Vec<InstWithOffset> {
             Inst::Init(x) => InstWithOffset::Init(0, *x),
             Inst::GetChar => InstWithOffset::GetChar(0),
             Inst::PutChar => InstWithOffset::PutChar(0),
-            Inst::Loop(l) => InstWithOffset::Loop(0, annotate_offset(l)),
+            Inst::Loop(l) => InstWithOffset::Loop(annotate_offset(l)),
         })
         .collect()
 }
@@ -132,16 +132,16 @@ fn delay_move_ptr(insts: &[InstWithOffset]) -> Vec<InstWithOffset> {
             InstWithOffset::AddI(ofs, x) => result.push(InstWithOffset::AddI(ofs + offset, *x)),
             InstWithOffset::MovePtr(x) => offset += *x,
             InstWithOffset::Init(ofs, x) => result.push(InstWithOffset::Init(ofs + offset, *x)),
-            //InstWithOffset::Dup(ofs1, ofs2) => {
-            //    result.push(InstWithOffset::Dup(*ofs1 + offset, *ofs2 + offset))
-            //}
+            InstWithOffset::AddMul(ofs1, ofs2, x) => {
+                result.push(InstWithOffset::AddMul(*ofs1 + offset, *ofs2 + offset, *x))
+            }
             InstWithOffset::GetChar(ofs) => result.push(InstWithOffset::GetChar(ofs + offset)),
             InstWithOffset::PutChar(ofs) => result.push(InstWithOffset::PutChar(ofs + offset)),
-            InstWithOffset::Loop(_ofs, l) => {
+            InstWithOffset::Loop(l) => {
                 result.push(InstWithOffset::MovePtr(offset));
                 offset = 0;
                 let new_l = delay_move_ptr(l);
-                result.push(InstWithOffset::Loop(0, new_l));
+                result.push(InstWithOffset::Loop(new_l));
             }
         }
     }
@@ -162,10 +162,50 @@ fn remove_zero_move_ptr(insts: &[InstWithOffset]) -> Vec<InstWithOffset> {
                     None
                 }
             }
-            InstWithOffset::Loop(ofs, l) => {
-                Some(InstWithOffset::Loop(*ofs, remove_zero_move_ptr(l)))
-            }
+            InstWithOffset::Loop(l) => Some(InstWithOffset::Loop(remove_zero_move_ptr(l))),
             _ => Some(inst.clone()),
+        })
+        .collect()
+}
+
+fn loop_to_addmul_body(insts: &[InstWithOffset]) -> Option<Vec<InstWithOffset>> {
+    let mut base_add = 0u8;
+    let mut add_ops = Vec::new();
+    for inst in insts {
+        if let InstWithOffset::AddI(ofs, x) = inst {
+            if *ofs == 0 {
+                base_add = base_add.wrapping_add(*x);
+            } else {
+                add_ops.push((*ofs, *x));
+            }
+        } else {
+            return None;
+        }
+    }
+    if base_add != 255 {
+        return None;
+    }
+    let mut result = Vec::new();
+    for (ofs, x) in add_ops {
+        result.push(InstWithOffset::AddMul(0, ofs, x));
+    }
+    result.push(InstWithOffset::Init(0, 0));
+    Some(result)
+}
+
+fn loop_to_addmul(insts: &[InstWithOffset]) -> Vec<InstWithOffset> {
+    insts
+        .iter()
+        .map(|inst| match inst {
+            InstWithOffset::Loop(l) => {
+                if let Some(new_insts) = loop_to_addmul_body(l) {
+                    //eprintln!("{:?} => {:?}", l, new_insts);
+                    InstWithOffset::Loop(new_insts)
+                } else {
+                    InstWithOffset::Loop(loop_to_addmul(l))
+                }
+            }
+            _ => inst.clone(),
         })
         .collect()
 }
@@ -211,27 +251,34 @@ fn exec_body(
         *cycle_count += 1;
         match inst {
             InstWithOffset::AddI(ofs, x) => {
-                let index = ptr.wrapping_add_signed(*ofs);
+                let index = ptr.checked_add_signed(*ofs).unwrap();
                 memory[index] = memory[index].wrapping_add(*x)
             }
             InstWithOffset::MovePtr(x) => {
-                *ptr = ptr.wrapping_add_signed(*x);
+                *ptr = ptr.checked_add_signed(*x).unwrap();
             }
             InstWithOffset::Init(ofs, x) => {
                 let index = ptr.wrapping_add_signed(*ofs);
                 memory[index] = *x;
             }
+            InstWithOffset::AddMul(ofs1, ofs2, x) => {
+                let index1 = ptr.checked_add_signed(*ofs1).unwrap();
+                let index2 = ptr.checked_add_signed(*ofs2).unwrap();
+                memory[index2] = memory[index2].wrapping_add(memory[index1].wrapping_mul(*x))
+            }
             InstWithOffset::GetChar(ofs) => {
-                let index = ptr.wrapping_add_signed(*ofs);
+                let index = ptr.checked_add_signed(*ofs).unwrap();
                 memory[index] = getchar()?
             }
             InstWithOffset::PutChar(ofs) => {
-                let index = ptr.wrapping_add_signed(*ofs);
+                let index = ptr.checked_add_signed(*ofs).unwrap();
                 putchar(memory[index])?
             }
-            InstWithOffset::Loop(ofs, l) => {
-                while memory[ptr.wrapping_add_signed(*ofs)] != 0 {
+            InstWithOffset::Loop(l) => {
+                *cycle_count += 1;
+                while memory[*ptr] != 0 {
                     exec_body(l, memory, ptr, cycle_count)?;
+                    *cycle_count += 1;
                 }
             }
         }
@@ -257,5 +304,6 @@ fn main() -> Result<(), std::io::Error> {
     let insts = annotate_offset(&insts);
     let insts = delay_move_ptr(&insts);
     let insts = remove_zero_move_ptr(&insts);
+    let insts = loop_to_addmul(&insts);
     exec(&insts)
 }
