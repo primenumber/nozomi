@@ -307,3 +307,29 @@ fn main() -> Result<(), std::io::Error> {
     let insts = loop_to_addmul(&insts);
     exec(&insts)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_loop_to_addmul() {
+        let insts = [
+            InstWithOffset::AddI(0, 2),
+            InstWithOffset::MovePtr(2),
+            InstWithOffset::Loop(vec![
+                InstWithOffset::AddI(0, 255),
+                InstWithOffset::AddI(1, 1),
+            ]),
+        ];
+        assert_eq!(
+            loop_to_addmul(&insts),
+            vec![
+                InstWithOffset::AddI(0, 2),
+                InstWithOffset::MovePtr(2),
+                InstWithOffset::AddMul(0, 1, 1),
+                InstWithOffset::Init(0, 0)
+            ]
+        );
+    }
+}
